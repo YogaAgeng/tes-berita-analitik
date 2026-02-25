@@ -4,6 +4,9 @@ import { STOP_WORDS } from "../lib/stopWords.js";
 
 const NEWS_FIELDS =
   "id, title, description, source, published_at, category, url, created_at";
+const NEWS_API_TIMEOUT_MS = Number(process.env.NEWS_API_TIMEOUT_MS || 10000);
+const NEWS_API_RETRIES = Number(process.env.NEWS_API_RETRIES || 2);
+const NOISE_KEYWORDS = new Set(["http", "https", "www", "com", "amp"]);
 
 const normalizeDateRange = (from, to) => {
   if (!from && !to) {
@@ -31,6 +34,8 @@ export const getNews = async ({
   order = "DESC",
   from,
   to,
+  page,
+  limit,
 }) => {
   const allowedSort = new Set(["published_at", "created_at", "title", "category"]);
   const safeSortBy = allowedSort.has(sortBy) ? sortBy : "published_at";
@@ -60,6 +65,34 @@ export const getNews = async ({
   }
 
   const whereClause = where.length ? `WHERE ${where.join(" AND ")}` : "";
+
+  const pageNumber = Number(page);
+  const limitNumber = Number(limit);
+  const usePagination = Number.isInteger(pageNumber) && pageNumber >= 1;
+  const safeLimit = Number.isInteger(limitNumber) && limitNumber >= 1 && limitNumber <= 100 ? limitNumber : 20;
+
+  if (usePagination) {
+    const offset = (pageNumber - 1) * safeLimit;
+    const [[countRow]] = await db.query(
+      `SELECT COUNT(*) AS total FROM news ${whereClause}`,
+      params,
+    );
+
+    const [rows] = await db.query(
+      `SELECT ${NEWS_FIELDS} FROM news ${whereClause} ORDER BY ${safeSortBy} ${safeOrder} LIMIT ? OFFSET ?`,
+      [...params, safeLimit, offset],
+    );
+
+    return {
+      data: rows,
+      pagination: {
+        page: pageNumber,
+        limit: safeLimit,
+        total: Number(countRow.total || 0),
+        totalPages: Math.ceil(Number(countRow.total || 0) / safeLimit) || 1,
+      },
+    };
+  }
 
   const [rows] = await db.query(
     `SELECT ${NEWS_FIELDS} FROM news ${whereClause} ORDER BY ${safeSortBy} ${safeOrder}`,
@@ -106,6 +139,22 @@ const cleanWord = (value) =>
     .replace(/[^a-z0-9\s]/g, " ")
     .trim();
 
+const isMeaningfulKeyword = (word) => {
+  if (word.length < 3 || word.length > 30) {
+    return false;
+  }
+
+  if (!/[a-z]/.test(word)) {
+    return false;
+  }
+
+  if (STOP_WORDS.has(word) || NOISE_KEYWORDS.has(word)) {
+    return false;
+  }
+
+  return true;
+};
+
 const extractKeywords = (articles) => {
   const keywordMap = new Map();
 
@@ -113,7 +162,7 @@ const extractKeywords = (articles) => {
     const title = article.title || "";
     const words = cleanWord(title).split(/\s+/).filter(Boolean);
     words.forEach((word) => {
-      if (word.length < 3 || STOP_WORDS.has(word)) {
+      if (!isMeaningfulKeyword(word)) {
         return;
       }
       const category = article.category || "general";
@@ -181,33 +230,80 @@ const logSync = async ({ totalInserted, source, query }) => {
   await db.query("INSERT INTO sync_logs (total_inserted) VALUES (?)", [totalInserted]);
 };
 
-const fetchExternalNews = async () => {
-  const baseUrl = process.env.NEWS_API_BASE_URL || "https://newsapi.org/v2/everything";
+const normalizeSyncOptions = (options = {}) => {
+  const rawPageSize = options.pageSize ?? process.env.NEWS_API_PAGE_SIZE ?? 50;
+  const pageSizeNumber = Number(rawPageSize);
+  const queryValue = String(options.query ?? options.q ?? "").trim();
+  const pageSize = Number.isFinite(pageSizeNumber)
+    ? Math.min(Math.max(Math.trunc(pageSizeNumber), 1), 100)
+    : 50;
+
+  if (!queryValue) {
+    const error = new Error("Query topic is required. Use ?q=<topic> when syncing news.");
+    error.status = 400;
+    throw error;
+  }
+
+  return {
+    baseUrl: process.env.NEWS_API_BASE_URL || "https://newsapi.org/v2/everything",
+    query: queryValue,
+    language: options.language || process.env.NEWS_API_LANGUAGE || "id",
+    sortBy: options.sortBy || process.env.NEWS_API_SORT_BY || "publishedAt",
+    pageSize,
+    defaultCategory: options.defaultCategory || process.env.NEWS_DEFAULT_CATEGORY || "general",
+  };
+};
+
+const fetchExternalNews = async (options = {}) => {
+  const { baseUrl, query, language, sortBy, pageSize, defaultCategory } = normalizeSyncOptions(options);
   const apiKey = process.env.NEWS_API_KEY;
-  const query = process.env.NEWS_API_QUERY || "indonesia OR teknologi";
-  const language = process.env.NEWS_API_LANGUAGE || "id";
-  const sortBy = process.env.NEWS_API_SORT_BY || "publishedAt";
-  const pageSize = Number(process.env.NEWS_API_PAGE_SIZE || 50);
-  const defaultCategory = process.env.NEWS_DEFAULT_CATEGORY || "general";
 
   if (!apiKey) {
     throw new Error("News API configuration is missing");
   }
 
-  const response = await axios.get(baseUrl, {
-    params: {
-      apiKey,
-      q: query,
-      language,
-      sortBy,
-      pageSize,
-    },
-  });
+  const params = {
+    apiKey,
+    q: query,
+    sortBy,
+    pageSize,
+  };
 
-  const articles = response.data?.articles || [];
+  if (language) {
+    params.language = language;
+  }
+
+  const requestExternalNews = async () =>
+    axios.get(baseUrl, {
+      params,
+      timeout: NEWS_API_TIMEOUT_MS,
+    });
+
+  let response;
+  let attempt = 0;
+
+  while (attempt <= NEWS_API_RETRIES) {
+    try {
+      response = await requestExternalNews();
+      break;
+    } catch (error) {
+      const status = error.response?.status;
+      const isRetryable = !status || status === 429 || status >= 500;
+
+      if (!isRetryable || attempt === NEWS_API_RETRIES) {
+        throw error;
+      }
+
+      const delayMs = 500 * 2 ** attempt;
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      attempt += 1;
+    }
+  }
+
+  const articles = response?.data?.articles || [];
 
   return {
-    source: "everything",
+    source: baseUrl,
     query,
     articles: articles
       .map((item) => ({
@@ -222,8 +318,8 @@ const fetchExternalNews = async () => {
   };
 };
 
-export const syncNews = async () => {
-  const { source, query, articles: fetchedArticles } = await fetchExternalNews();
+export const syncNews = async (options = {}) => {
+  const { source, query, articles: fetchedArticles } = await fetchExternalNews(options);
   const fetched = fetchedArticles.length;
   const uniqueArticles = Array.from(new Map(fetchedArticles.map((article) => [article.url, article])).values());
 

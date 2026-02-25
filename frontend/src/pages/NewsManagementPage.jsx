@@ -12,11 +12,13 @@ export default function NewsManagementPage() {
   const [news, setNews] = useState([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [syncTopic, setSyncTopic] = useState("Teknologi");
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("");
   const [lastSync, setLastSync] = useState(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState(null);
+  const quickTopics = ["Teknologi", "Olahraga", "Pemilu", "Bitcoin", "Startup"];
 
   const loadNews = async () => {
     setLoading(true);
@@ -52,12 +54,18 @@ export default function NewsManagementPage() {
   );
 
   const handleSync = async () => {
+    const topic = syncTopic.trim();
+    if (!topic) {
+      toast.error("Topik sync wajib diisi");
+      return;
+    }
+
     setSyncing(true);
     const syncToast = toast.loading("Sinkronisasi berita sedang berjalan...");
     try {
-      const { data } = await api.post("/news/sync");
+      const { data } = await api.post("/news/sync", null, { params: { q: topic } });
       toast.success(
-        `Sync selesai. Fetched: ${data.fetched ?? 0}, Baru: ${data.inserted ?? 0}, Duplikat: ${data.duplicated ?? 0}`,
+        `Topik "${topic}" selesai. Fetched: ${data.fetched ?? 0}, Baru: ${data.inserted ?? 0}, Duplikat: ${data.duplicated ?? 0}`,
         { id: syncToast },
       );
       setLastSync(data.lastSync);
@@ -112,7 +120,7 @@ export default function NewsManagementPage() {
 
   return (
     <section className="space-y-4">
-      <div className="rounded-2xl bg-white/90 p-4 shadow-panel backdrop-blur">
+      <div className="glass-panel rounded-3xl p-4 sm:p-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="grid flex-1 grid-cols-1 gap-3 sm:grid-cols-2 lg:max-w-2xl">
             <input
@@ -135,10 +143,43 @@ export default function NewsManagementPage() {
             </select>
           </div>
 
-          <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center">
-            <p className="text-xs font-medium text-slate-500">
-              Last Sync: <span className="text-slate-700">{formatDateTime(lastSync?.synced_at)}</span>
+          <div className="flex flex-col items-start gap-2 md:items-end">
+            <p className="text-xs font-medium text-slate-600">
+              Last Sync: <span className="font-semibold text-slate-800">{formatDateTime(lastSync?.synced_at)}</span>
             </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <label htmlFor="sync-topic" className="text-xs font-semibold text-slate-600">
+                Topik:
+              </label>
+              <input
+                id="sync-topic"
+                list="sync-topic-options"
+                value={syncTopic}
+                onChange={(e) => setSyncTopic(e.target.value)}
+                placeholder="contoh: olahraga"
+                className="w-40 rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm outline-none ring-0 focus:border-brand-500"
+              />
+              <datalist id="sync-topic-options">
+                {quickTopics.map((topic) => (
+                  <option key={topic} value={topic} />
+                ))}
+              </datalist>
+
+              {quickTopics.map((topic) => (
+                <button
+                  key={topic}
+                  type="button"
+                  onClick={() => setSyncTopic(topic)}
+                  className={`rounded-full px-3 py-1 text-xs font-semibold transition ${
+                    syncTopic.trim().toLowerCase() === topic.toLowerCase()
+                      ? "bg-brand-100 text-brand-700"
+                      : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                  }`}
+                >
+                  {topic}
+                </button>
+              ))}
+            </div>
             <button
               type="button"
               onClick={handleSync}
@@ -161,7 +202,7 @@ export default function NewsManagementPage() {
         </div>
       </div>
 
-      <div className="overflow-hidden rounded-2xl bg-white/90 shadow-panel backdrop-blur">
+      <div className="glass-panel overflow-hidden rounded-3xl">
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-slate-200 text-sm">
             <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">

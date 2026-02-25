@@ -8,6 +8,7 @@ import {
   syncNewsHandler,
   updateNewsHandler,
 } from "../controllers/news.controller.js";
+import { rateLimitSync, requireSyncToken } from "../middlewares/sync.middleware.js";
 
 const router = Router();
 
@@ -15,7 +16,7 @@ router.get("/", listNewsHandler);
 router.post("/", createNewsHandler);
 router.put("/:id", updateNewsHandler);
 router.delete("/:id", deleteNewsHandler);
-router.post("/sync", syncNewsHandler);
+router.post("/sync", requireSyncToken, rateLimitSync, syncNewsHandler);
 router.get("/dashboard", dashboardHandler);
 router.get("/last-sync", lastSyncHandler);
 

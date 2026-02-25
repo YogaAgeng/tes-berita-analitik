@@ -38,16 +38,20 @@ docker compose up --build
 
 ## Endpoint Backend Utama
 
-- `GET /api/news` - list berita (search/filter/sort)
+- `GET /api/news` - list berita (search/filter/sort, opsional pagination `page` + `limit`)
 - `POST /api/news` - tambah berita
 - `PUT /api/news/:id` - update berita
 - `DELETE /api/news/:id` - hapus berita
-- `POST /api/news/sync` - sinkronisasi dari API publik (response detail: fetched/inserted/duplicated)
+- `POST /api/news/sync` - sinkronisasi dari API publik (response detail: fetched/inserted/duplicated; topik wajib dikirim via query params seperti `?q=bitcoin&language=en`)
 - `GET /api/news/last-sync` - info sinkronisasi terakhir
 - `GET /api/news/dashboard` - data dashboard analitik
 
 ## Catatan
 
 - File `backend/.env` saat ini berisi placeholder API key; ganti sebelum menjalankan fitur sinkronisasi.
-- Secara default sinkronisasi memakai endpoint `everything` dengan query agar hasil lebih stabil pada kuota NewsAPI gratis.
+- Sync bersifat per-request: topik wajib dikirim saat memanggil endpoint (contoh `q=bitcoin`) atau dari input Topik di UI.
+- Variabel `.env` kini dipakai untuk konfigurasi teknis sinkronisasi (endpoint, bahasa, sort, page size), bukan untuk topik default.
+- `SYNC_ADMIN_TOKEN` bisa diisi untuk melindungi endpoint sync lewat header `x-sync-token`.
+- Sync memiliki rate limit sederhana via `SYNC_RATE_LIMIT_SECONDS` (default 15 detik per IP).
+- Sinkronisasi NewsAPI memakai timeout + retry ringan (`NEWS_API_TIMEOUT_MS`, `NEWS_API_RETRIES`) untuk mengurangi kegagalan karena network/intermittent error.
 - `trending_keywords` diperbarui berdasarkan kata pada judul berita (dengan stop words sederhana EN/ID).
