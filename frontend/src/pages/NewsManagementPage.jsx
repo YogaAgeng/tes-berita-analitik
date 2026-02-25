@@ -56,7 +56,10 @@ export default function NewsManagementPage() {
     const syncToast = toast.loading("Sinkronisasi berita sedang berjalan...");
     try {
       const { data } = await api.post("/news/sync");
-      toast.success(`Sinkronisasi berhasil. Data baru: ${data.inserted}`, { id: syncToast });
+      toast.success(
+        `Sync selesai. Fetched: ${data.fetched ?? 0}, Baru: ${data.inserted ?? 0}, Duplikat: ${data.duplicated ?? 0}`,
+        { id: syncToast },
+      );
       setLastSync(data.lastSync);
       await loadNews();
     } catch (error) {

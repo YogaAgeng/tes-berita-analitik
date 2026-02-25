@@ -148,58 +148,88 @@ const persistTrendingKeywords = async (keywordMap) => {
   );
 };
 
-const fetchExternalNews = async () => {
-  const baseUrl = process.env.NEWS_API_BASE_URL;
-  const apiKey = process.env.NEWS_API_KEY;
-  const country = process.env.NEWS_API_COUNTRY || "id";
-  const pageSize = Number(process.env.NEWS_API_PAGE_SIZE || 50);
-  const categories = (process.env.NEWS_API_CATEGORIES || "general")
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
+let hasExtendedSyncLogColumnsCache;
 
-  if (!baseUrl || !apiKey) {
+const hasExtendedSyncLogColumns = async () => {
+  if (typeof hasExtendedSyncLogColumnsCache === "boolean") {
+    return hasExtendedSyncLogColumnsCache;
+  }
+
+  const [rows] = await db.query(
+    `SELECT COUNT(*) AS total
+     FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE()
+       AND TABLE_NAME = 'sync_logs'
+       AND COLUMN_NAME IN ('source_endpoint', 'query_used')`,
+  );
+
+  hasExtendedSyncLogColumnsCache = Number(rows[0]?.total) === 2;
+  return hasExtendedSyncLogColumnsCache;
+};
+
+const logSync = async ({ totalInserted, source, query }) => {
+  const supportsExtended = await hasExtendedSyncLogColumns();
+
+  if (supportsExtended) {
+    await db.query(
+      "INSERT INTO sync_logs (total_inserted, source_endpoint, query_used) VALUES (?, ?, ?)",
+      [totalInserted, source, query],
+    );
+    return;
+  }
+
+  await db.query("INSERT INTO sync_logs (total_inserted) VALUES (?)", [totalInserted]);
+};
+
+const fetchExternalNews = async () => {
+  const baseUrl = process.env.NEWS_API_BASE_URL || "https://newsapi.org/v2/everything";
+  const apiKey = process.env.NEWS_API_KEY;
+  const query = process.env.NEWS_API_QUERY || "indonesia OR teknologi";
+  const language = process.env.NEWS_API_LANGUAGE || "id";
+  const sortBy = process.env.NEWS_API_SORT_BY || "publishedAt";
+  const pageSize = Number(process.env.NEWS_API_PAGE_SIZE || 50);
+  const defaultCategory = process.env.NEWS_DEFAULT_CATEGORY || "general";
+
+  if (!apiKey) {
     throw new Error("News API configuration is missing");
   }
 
-  const responses = await Promise.all(
-    categories.map((category) =>
-      axios.get(baseUrl, {
-        params: {
-          apiKey,
-          country,
-          category,
-          pageSize,
-        },
-      }),
-    ),
-  );
+  const response = await axios.get(baseUrl, {
+    params: {
+      apiKey,
+      q: query,
+      language,
+      sortBy,
+      pageSize,
+    },
+  });
 
-  return responses
-    .flatMap((response, index) => {
-      const category = categories[index] || "general";
-      const articles = response.data?.articles || [];
-      return articles.map((item) => ({
+  const articles = response.data?.articles || [];
+
+  return {
+    source: "everything",
+    query,
+    articles: articles
+      .map((item) => ({
         title: item.title || "Untitled",
         description: item.description || "",
         source: item.source?.name || "Unknown",
         published_at: item.publishedAt ? new Date(item.publishedAt) : new Date(),
-        category,
+        category: defaultCategory,
         url: item.url,
-      }));
-    })
-    .filter((item) => item.url);
+      }))
+      .filter((item) => item.url),
+  };
 };
 
 export const syncNews = async () => {
-  const fetchedArticles = await fetchExternalNews();
-  const uniqueArticles = Array.from(
-    new Map(fetchedArticles.map((article) => [article.url, article])).values(),
-  );
+  const { source, query, articles: fetchedArticles } = await fetchExternalNews();
+  const fetched = fetchedArticles.length;
+  const uniqueArticles = Array.from(new Map(fetchedArticles.map((article) => [article.url, article])).values());
 
   if (!uniqueArticles.length) {
-    await db.query("INSERT INTO sync_logs (total_inserted) VALUES (0)");
-    return { inserted: 0 };
+    await logSync({ totalInserted: 0, source, query });
+    return { source, query, fetched, inserted: 0, duplicated: 0 };
   }
 
   const urlPlaceholders = uniqueArticles.map(() => "?").join(",");
@@ -211,8 +241,8 @@ export const syncNews = async () => {
   const articles = uniqueArticles.filter((article) => !existingUrls.has(article.url));
 
   if (!articles.length) {
-    await db.query("INSERT INTO sync_logs (total_inserted) VALUES (0)");
-    return { inserted: 0 };
+    await logSync({ totalInserted: 0, source, query });
+    return { source, query, fetched, inserted: 0, duplicated: fetched };
   }
 
   const placeholders = articles.map(() => "(?, ?, ?, ?, ?, ?)").join(",");
@@ -231,11 +261,18 @@ export const syncNews = async () => {
     params,
   );
 
-  await db.query("INSERT INTO sync_logs (total_inserted) VALUES (?)", [result.affectedRows || 0]);
+  await logSync({ totalInserted: result.affectedRows || 0, source, query });
   const keywords = extractKeywords(articles);
   await persistTrendingKeywords(keywords);
 
-  return { inserted: result.affectedRows || 0 };
+  const inserted = result.affectedRows || 0;
+  return {
+    source,
+    query,
+    fetched,
+    inserted,
+    duplicated: Math.max(fetched - inserted, 0),
+  };
 };
 
 export const getDashboardAnalytics = async ({ from, to }) => {

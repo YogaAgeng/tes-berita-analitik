@@ -21,5 +21,7 @@ CREATE TABLE IF NOT EXISTS trending_keywords (
 CREATE TABLE IF NOT EXISTS sync_logs (
   id INT AUTO_INCREMENT PRIMARY KEY,
   synced_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  total_inserted INT NOT NULL DEFAULT 0
+  total_inserted INT NOT NULL DEFAULT 0,
+  source_endpoint VARCHAR(100) NULL,
+  query_used VARCHAR(255) NULL
 );
