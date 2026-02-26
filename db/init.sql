@@ -9,6 +9,10 @@ CREATE TABLE IF NOT EXISTS news (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE INDEX idx_news_published_at ON news (published_at);
+CREATE INDEX idx_news_category ON news (category);
+CREATE INDEX idx_news_created_at ON news (created_at);
+
 CREATE TABLE IF NOT EXISTS trending_keywords (
   id INT AUTO_INCREMENT PRIMARY KEY,
   keyword VARCHAR(255) NOT NULL,

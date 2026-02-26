@@ -68,38 +68,30 @@ export const getNews = async ({
 
   const pageNumber = Number(page);
   const limitNumber = Number(limit);
-  const usePagination = Number.isInteger(pageNumber) && pageNumber >= 1;
+  const safePage = Number.isInteger(pageNumber) && pageNumber >= 1 ? pageNumber : 1;
   const safeLimit = Number.isInteger(limitNumber) && limitNumber >= 1 && limitNumber <= 100 ? limitNumber : 20;
+  const offset = (safePage - 1) * safeLimit;
 
-  if (usePagination) {
-    const offset = (pageNumber - 1) * safeLimit;
-    const [[countRow]] = await db.query(
-      `SELECT COUNT(*) AS total FROM news ${whereClause}`,
-      params,
-    );
-
-    const [rows] = await db.query(
-      `SELECT ${NEWS_FIELDS} FROM news ${whereClause} ORDER BY ${safeSortBy} ${safeOrder} LIMIT ? OFFSET ?`,
-      [...params, safeLimit, offset],
-    );
-
-    return {
-      data: rows,
-      pagination: {
-        page: pageNumber,
-        limit: safeLimit,
-        total: Number(countRow.total || 0),
-        totalPages: Math.ceil(Number(countRow.total || 0) / safeLimit) || 1,
-      },
-    };
-  }
-
-  const [rows] = await db.query(
-    `SELECT ${NEWS_FIELDS} FROM news ${whereClause} ORDER BY ${safeSortBy} ${safeOrder}`,
+  const [[countRow]] = await db.query(
+    `SELECT COUNT(*) AS total FROM news ${whereClause}`,
     params,
   );
 
-  return rows;
+  const [rows] = await db.query(
+    `SELECT ${NEWS_FIELDS} FROM news ${whereClause} ORDER BY ${safeSortBy} ${safeOrder} LIMIT ? OFFSET ?`,
+    [...params, safeLimit, offset],
+  );
+
+  const total = Number(countRow.total || 0);
+  return {
+    data: rows,
+    pagination: {
+      page: safePage,
+      limit: safeLimit,
+      total,
+      totalPages: Math.ceil(total / safeLimit) || 1,
+    },
+  };
 };
 
 export const createNews = async (payload) => {

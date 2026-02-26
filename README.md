@@ -1,57 +1,125 @@
-# Aplikasi Pengelolaan Berita dengan Trending Topics & Analitik
+## Cara Menjalankan Aplikasi
 
-Proyek ini menyediakan aplikasi full-stack berbasis Docker untuk:
+### Prasyarat
 
-- CRUD data berita lokal
-- Sinkronisasi berita dari API publik (NewsAPI `everything` endpoint)
-- Anti-duplikasi berdasarkan URL (`INSERT IGNORE` + unique key)
-- Dashboard analitik (kategori, tren harian, trending keywords)
+- Docker Desktop aktif
+- Port `3000`, `5000`, `3306` tidak dipakai proses lain
 
-## Tech Stack
+### Konfigurasi
 
-- Frontend: React + Vite + Tailwind CSS + Tremor
-- Backend: Node.js + Express
-- Database: MySQL 8.0
-- Infra: Docker Compose
+Isi `backend/.env` minimal:
 
-## Struktur Proyek
-
-- `frontend/` - UI manajemen berita dan dashboard
-- `backend/` - API CRUD, sync, analytics
-- `db/init.sql` - skema database awal
-- `docker-compose.yml` - orchestration service lokal
-
-## Menjalankan Proyek
-
-1. Isi API key pada `backend/.env` (`NEWS_API_KEY=...`).
-2. (Opsional) Atur query sinkronisasi default seperti `NEWS_API_QUERY`, `NEWS_API_LANGUAGE`, dan `NEWS_API_SORT_BY`.
-3. Jalankan:
-
-```bash
-docker compose up --build
+```env
+NEWS_API_KEY=your_api_key_here
 ```
 
-4. Akses aplikasi:
+Opsional:
+
+```env
+NEWS_API_BASE_URL=https://newsapi.org/v2/everything
+NEWS_API_LANGUAGE=id
+NEWS_API_SORT_BY=publishedAt
+NEWS_API_PAGE_SIZE=50
+NEWS_API_TIMEOUT_MS=10000
+NEWS_API_RETRIES=2
+SYNC_ADMIN_TOKEN=
+SYNC_RATE_LIMIT_SECONDS=15
+```
+
+### Start
+
+```bash
+docker compose up -d --build
+```
+
+### Akses
 
 - Frontend: `http://localhost:3000`
 - Backend API: `http://localhost:5000/api`
+- Healthcheck: `http://localhost:5000/api/health`
 
-## Endpoint Backend Utama
+## Kontrak API (Penting)
 
-- `GET /api/news` - list berita (search/filter/sort, opsional pagination `page` + `limit`)
-- `POST /api/news` - tambah berita
+### `GET /api/news`
+
+Response sekarang selalu konsisten:
+
+```json
+{
+  "data": [],
+  "pagination": {
+    "page": 1,
+    "limit": 20,
+    "total": 0,
+    "totalPages": 1
+  }
+}
+```
+
+Catatan:
+
+- Default pagination: `page=1`, `limit=20`
+- Batas `limit`: `1..100`
+
+### Endpoint lainnya
+
+- `POST /api/news` - create berita
 - `PUT /api/news/:id` - update berita
-- `DELETE /api/news/:id` - hapus berita
-- `POST /api/news/sync` - sinkronisasi dari API publik (response detail: fetched/inserted/duplicated; topik wajib dikirim via query params seperti `?q=bitcoin&language=en`)
-- `GET /api/news/last-sync` - info sinkronisasi terakhir
-- `GET /api/news/dashboard` - data dashboard analitik
+- `DELETE /api/news/:id` - delete berita
+- `POST /api/news/sync?q=<topic>` - sync dari NewsAPI
+- `GET /api/news/last-sync` - data sync terakhir
+- `GET /api/news/dashboard` - payload analitik dashboard
 
-## Catatan
+## Contoh Curl
 
-- File `backend/.env` saat ini berisi placeholder API key; ganti sebelum menjalankan fitur sinkronisasi.
-- Sync bersifat per-request: topik wajib dikirim saat memanggil endpoint (contoh `q=bitcoin`) atau dari input Topik di UI.
-- Variabel `.env` kini dipakai untuk konfigurasi teknis sinkronisasi (endpoint, bahasa, sort, page size), bukan untuk topik default.
-- `SYNC_ADMIN_TOKEN` bisa diisi untuk melindungi endpoint sync lewat header `x-sync-token`.
-- Sync memiliki rate limit sederhana via `SYNC_RATE_LIMIT_SECONDS` (default 15 detik per IP).
-- Sinkronisasi NewsAPI memakai timeout + retry ringan (`NEWS_API_TIMEOUT_MS`, `NEWS_API_RETRIES`) untuk mengurangi kegagalan karena network/intermittent error.
-- `trending_keywords` diperbarui berdasarkan kata pada judul berita (dengan stop words sederhana EN/ID).
+```bash
+curl -s http://localhost:5000/api/health
+curl -s "http://localhost:5000/api/news?page=1&limit=20"
+curl -s "http://localhost:5000/api/news?search=bitcoin&category=general&page=1&limit=20"
+curl -s "http://localhost:5000/api/news/dashboard"
+curl -s -X POST "http://localhost:5000/api/news/sync?q=bitcoin&language=en&pageSize=5"
+```
+
+Jika `SYNC_ADMIN_TOKEN` diisi, sertakan header:
+
+```bash
+curl -s -X POST "http://localhost:5000/api/news/sync?q=bitcoin" \
+  -H "x-sync-token: <your_token>"
+```
+
+## Panduan UI Horizon
+
+Tema utama yang dipakai:
+
+- Background utama: `#F4F7FE`
+- Heading utama: `#2B3674`
+- Teks pendukung: `#A3AED0`
+- Primary action: `#4318FF` (hover `#3311DB`)
+- Card style: `rounded-[20px]`, `shadow-[0px_18px_40px_rgba(112,144,176,0.12)]`
+
+Tooltip donut chart (`Distribusi Kategori`) sudah dikunci behavior berikut:
+
+- tooltip mengikuti kursor (tanpa fixed position)
+- `pointer-events-none` pada wrapper custom tooltip
+- `wrapperStyle={{ pointerEvents: 'none' }}` pada komponen Recharts Tooltip
+- ada `offset` agar tidak menempel ke kursor
+
+## Refactor Clean Code yang Sudah Diterapkan
+
+- Standarisasi kontrak list API (`/api/news`) jadi shape tunggal `{ data, pagination }`
+- Refactor logic berita ke custom hook: `useNewsManagement`
+- Pemisahan UI section manajemen berita:
+  - `NewsFilterSyncSection`
+  - `NewsTableSection`
+- Penghapusan dead/commented code di wrapper utama `App.jsx`
+
+## Checklist Fungsional
+
+Setelah deploy lokal, cek:
+
+- CRUD berita berjalan (create/edit/delete)
+- Filter search + kategori berjalan
+- Sync topik berjalan dan update `Last Sync`
+- Tabel render dengan pagination metadata
+- Chart dashboard tampil, tooltip donut follow cursor
+
